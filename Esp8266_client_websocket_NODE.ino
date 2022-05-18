@@ -78,7 +78,7 @@ void setup() {
     //client.send("Hello Server");
 
 
- ArduinoOTA.setHostname(" OTA  ");
+ ArduinoOTA.setHostname(" OTA ");
   ArduinoOTA.onStart([]() {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH) {
