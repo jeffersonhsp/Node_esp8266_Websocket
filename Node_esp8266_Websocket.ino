@@ -1,10 +1,15 @@
 /*
   Adaptado por jefferson henrique.
-  
-	<ArduinoWebsockets.h> By Gil Maimon	https://github.com/gilmaimon/ArduinoWebsockets
+ 
 */
+#include <WebSocketsClient_Generic.h>
+#include <WebSocketsServer_Generic.h>
+#include <Hash.h>
+#include <Arduino_JSON.h>
 
-#include <ArduinoWebsockets.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+
 #include <ESP8266WebServer.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
@@ -12,21 +17,119 @@
 #include <ArduinoOTA.h>
 
 #define LED 2
+#define sizebuff 100
+char pd[sizebuff];
+JSONVar myObject;
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "br.pool.ntp.org", -10800, 60000);
+
 
 bool conexao_ws   = false;
+bool obrig_ws     = false;
 int  conexao_wifi = 0;  
 bool conexao_mdns = false;
-bool obrig_ws     = false;
+
 
 char html_page[] PROGMEM = R"=====(
-
 <!DOCTYPE html>
 <html lang="pt-br">
-    <head>
-    </head>
-    <body>
-    <h1> Hello word </h1>
-    </body>
+  <head>
+    <style>
+      body {
+        display: block;
+        margin: 0px;
+      }
+      
+      h1 {
+        text-align: center;
+        text-transform: uppercase;
+        color: #4CAF50;
+        font-size: 4.5vw;
+      }
+
+      .ta{
+      min-height: 50vh;
+          width: 90%;
+          height: 50%
+          margin-right: 5%;
+          margin-left: 5%;
+          height: 150px;
+          padding: 12px 20px;
+          box-sizing: border-box;
+          border: 2px solid #ccc;
+          border-radius: 4px;
+          background-color: #f8f8f8;
+          font-size: 16px;
+          resize: none;
+      }
+      
+      .but{
+    margin-top: 5%;
+        margin-left: 5%;
+    font-size: 3vw;
+        background-color: #04AA6D;
+        border-radius: 6px;
+        border-color: gray;
+        color: white;
+        padding: 2vw 4vw;
+        text-decoration: none;
+        cursor: pointer;
+      }
+    .divbut{
+    align-itens: inline;
+    }
+    </style>
+  </head>
+  <body>
+    <br>
+    <h1> <label> Recebido da serial: </label> </h1>
+
+    <form>
+      <textarea class="ta" id="w3review" name="" rows="8" cols="50" readonly>
+      
+      </textarea>
+      <br>
+    </form>
+  <div class="divbut">
+    <button type="button" class="but" onclick="">Enviar</button>
+    <button type="button" class="but" onclick="limpar()">Limpar</button>
+  </div>
+  </body>
+
+  <script>
+    let ws_conect = false;
+    let connection = new WebSocket('ws://192.168.4.1:81/'); 
+      connection.onopen = function () {  
+      connection.send('Connect ' + new Date()); 
+      ws_conect=true;
+    }; 
+    connection.onclose = function (error) {    
+      console.log('WebSocket close ', error);
+      ws_conect=false;
+    };
+    connection.onerror = function (error) {    
+      console.log('WebSocket Error ', error);
+    };
+    connection.onmessage = function (e) { 
+      myFunction(e.data);
+      console.log(e.data);
+    };
+    setInterval(() => {
+      if(ws_conect)connection.send("Request");
+    },500);
+
+    document.getElementById("w3review").innerHTML = ""
+
+    function myFunction(t){
+      atual = document.getElementById("w3review").innerHTML
+      document.getElementById("w3review").innerHTML= atual + t + '\n'
+      document.getElementById("w3review").scrollTop = document.getElementById("w3review").scrollHeight
+    }
+  function limpar(){
+    document.getElementById("w3review").innerHTML="";
+  }
+  </script>
 </html>
  )=====";
 
@@ -37,44 +140,149 @@ const char* pass = "t5tb7ffx"; //Enter Password
 const char* ssid = "ESP8266"; //Enter SSID
 const char* password = "10203040"; //Enter Password
 
-const char* websockets_server_host = "safe-sea-86700.herokuapp.com"; //Enter server adress
-const uint16_t websockets_server_port = 80; // Enter server port
+const char* WS_SERVER = "safe-sea-86700.herokuapp.com"; //Enter server adress
+const uint16_t WS_PORT = 80; // Enter server port
 
-
-using namespace websockets;
-
-WebsocketsClient client;
 ESP8266WebServer server(80);
+WebSocketsClient webSocketc;
+WebSocketsServer webSockets = WebSocketsServer(81);
 
 
-void onMessageCallback(WebsocketsMessage message) {
-    Serial.print("Got Message: ");
-    if(message.data() == "OFF")digitalWrite(LED, HIGH);
-    if(message.data() == "ON")digitalWrite(LED, LOW);
-    Serial.println(message.data());
+
+//Server
+void webSocketEvents(const uint8_t& num, const WStype_t& type, uint8_t * payload, const size_t& length)
+{
+  (void) length;
+  
+  switch (type)
+  {
+    case WStype_DISCONNECTED:
+      Serial.printf("[%u] Disconnected!\n", num);
+      break;
+      
+    case WStype_CONNECTED:
+      {
+        IPAddress ip = webSockets.remoteIP(num);
+        Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
+
+        // send message to client
+        webSockets.sendTXT(num, "Connected");
+      }
+      break;
+      
+    case WStype_TEXT:
+      Serial.printf("[%u] get Text: %s\n", num, payload);
+      
+      // send message to client
+      webSockets.sendTXT(num, "json");
+
+      // send data to all connected clients
+      // webSocket.broadcastTXT("message here");
+      break;
+      
+    case WStype_BIN:
+      Serial.printf("[%u] get binary length: %u\n", num, length);
+      hexdump(payload, length);
+
+      // send message to client
+      // webSocket.sendBIN(num, payload, length);
+      break;
+
+    default:
+      break;
+  }
 }
-void onEventsCallback(WebsocketsEvent event, String data) {
-    if(event == WebsocketsEvent::ConnectionOpened) {
-        Serial.println("Connnection Websocket Opened");
-    } else if(event == WebsocketsEvent::ConnectionClosed) {
+
+
+
+
+
+//client
+void webSocketEventc(const WStype_t& type, uint8_t * payload, const size_t& length)
+{
+  switch (type)
+  {
+    case WStype_DISCONNECTED:
+      if (conexao_ws)
+      {
+        Serial.println("[WSc] Disconnected!");
         conexao_ws = false;
-        Serial.println("Connnection Closed");
-    } else if(event == WebsocketsEvent::GotPing) {
-        Serial.println("Got a Ping!");
-    } else if(event == WebsocketsEvent::GotPong) {
-        Serial.println("Got a Pong!");
-    }
+      }
+      break;
+    case WStype_CONNECTED:
+      {
+        conexao_ws = true;
+        Serial.print("[WSc] Connected to url: ");
+        Serial.println((char *) payload);
+
+        // send message to server when Connected
+        webSocketc.sendTXT("Connected");
+      }
+      break;
+    case WStype_TEXT:
+
+      
+      for(uint8_t i=0;i<sizebuff;i++)pd[i] = 0;
+      for(uint8_t i=0;i<sizebuff;i++){
+        if(payload[i])pd[i]=payload[i];
+        else i=sizebuff;
+      }
+
+      myObject = JSON.parse(pd);
+      if (JSON.typeof(myObject) == "undefined") {
+        Serial.println("Parsing input failed!");
+        return;
+      }
+      
+      if (myObject.hasOwnProperty("output1")){
+        if(String((const char*) myObject["output1"]) == "ON")digitalWrite(LED, LOW);
+        if(String((const char*) myObject["output1"]) == "OFF")digitalWrite(LED, HIGH); 
+        
+        Serial.println(timeClient.getFormattedTime());
+      }
+      
+      break;
+    case WStype_BIN:
+      Serial.printf("[WSc] get binary length: %u\n", length);
+      hexdump(payload, length);
+
+      // send data to server
+      webSocketc.sendBIN(payload, length);
+      break;
+
+    case WStype_PING:
+      // pong will be send automatically
+      Serial.printf("[WSc] get ping\n");
+      break;
+      
+    case WStype_PONG:
+      // answer to a ping we send
+      Serial.printf("[WSc] get pong\n");
+      break;
+
+    case WStype_ERROR:
+    case WStype_FRAGMENT_TEXT_START:
+    case WStype_FRAGMENT_BIN_START:
+    case WStype_FRAGMENT:
+    case WStype_FRAGMENT_FIN:
+      break;
+
+    default:
+      break;
+  }
 }
+
 
 
 
 
 void setup() {
-    pinMode(LED, OUTPUT);
+  pinMode(LED, OUTPUT);
+
     
-    Serial.begin(115200);
-    Serial.println("Serial.begin");
-    delay(500);
+  Serial.begin(115200);
+  Serial.println("Serial.begin");
+  delay(500);
 
   // Don't save WiFi configuration in flash - optional
   WiFi.persistent(false);
@@ -82,28 +290,21 @@ void setup() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(ssid, password);
 
-/*  // More is possible
-  Serial.print("WiFi connected  >> \"");
-  Serial.print(WiFi.SSID());
-  Serial.print("\" ");
-  Serial.println(WiFi.localIP());
-
-  */
   server.on("/", []() {
     server.send(200, "text/html", html_page);
   });
   server.begin();
 
+  //server
+  webSockets.begin();
+  webSockets.onEvent(webSocketEvents);
 
 
-
-
-  // run callback when messages are received
-  client.onMessage(onMessageCallback);
-  // run callback when events are occuring
-  client.onEvent(onEventsCallback);
-  //client.send("Hello Server");
-
+  //client
+  webSocketc.begin(WS_SERVER, WS_PORT, "/");
+  webSocketc.onEvent(webSocketEventc);
+  webSocketc.setReconnectInterval(5000);
+  webSocketc.enableHeartbeat(15000, 3000, 2);
 
 
 
@@ -153,9 +354,7 @@ ArduinoOTA.onStart([]() {
           server.handleClient();
 
           if(currentMillis > ledMillis+50){digitalWrite(LED, !digitalRead(LED));  ledMillis = currentMillis;}
-
           if(conexao_wifi != WL_CONNECTED)conexao_wifi = WiFi.status();
-          if(!conexao_ws)conexao_ws = client.connect(websockets_server_host, websockets_server_port, "/");
           if(!conexao_mdns)conexao_mdns = MDNS.begin("principal");
 
           if(currentMillis > printMillis+1000){
@@ -168,18 +367,21 @@ ArduinoOTA.onStart([]() {
           }
   }
 
-
   // Add service to MDNS-SD
   MDNS.addService("http", "tcp", 80);
-
+  timeClient.begin();
 }
+
+uint32_t current_millis = 0;
 
 
 void loop() {
-    server.handleClient();
-    client.poll();
-    ArduinoOTA.handle();
-    MDNS.update();
-    while(!conexao_ws){conexao_ws = client.connect(websockets_server_host, websockets_server_port, "/");  Serial.println("Tentando reconexão com websocket");  delay(1000); }
-    while(WiFi.status() != WL_CONNECTED) { WiFi.begin(id,pass); Serial.print("WiFi Disconnected");  delay(6000);}
+  webSocketc.loop();
+  webSockets.loop();
+  server.handleClient();
+  ArduinoOTA.handle();
+  MDNS.update();
+  if(millis() > current_millis + 100){timeClient.update(); current_millis = millis();}  //  atualiza a hora a cada 100 millisegundos.
+  //while(!conexao_ws){conexao_ws = client.connect(websockets_server_host, websockets_server_port, "/");  Serial.println("Tentando reconexão com websocket");  delay(1000); }
+  //while(WiFi.status() != WL_CONNECTED) { WiFi.begin(id,pass); Serial.print("WiFi Disconnected");  delay(6000);}
 }
