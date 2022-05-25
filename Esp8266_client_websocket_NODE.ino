@@ -3,12 +3,13 @@
 #include <Hash.h>
 #include <Arduino_JSON.h>
 #include <ESP8266HTTPUpdateServer.h>
+#include <EEPROM.h>
 
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
-#include "html_page.h"
+
 
 #define _WEBSOCKETS_LOGLEVEL_     2
 #define sizebuff 128
@@ -25,8 +26,11 @@ bool flag_env_ser_esp=false;
 bool conexao_ws   = false;
 
 
-const char* ssid = "BOKUS 03"; //Enter SSID
-const char* password = "424F4B5553"; //Enter Password
+char ssid[30]; //Enter SSID
+char password[30];  //Enter Password
+
+
+
 const char* host = "node-red-nippon.herokuapp.com"; //Enter server adress
 const uint16_t port = 80; // Enter server port
 
@@ -37,6 +41,10 @@ ESP8266HTTPUpdateServer httpUpdater;
 
 WebSocketsClient webSocketc;
 WebSocketsServer webSockets = WebSocketsServer(81);
+
+#include "html_page.h"
+#include "html_login.h"
+
 
 
 //Server
@@ -67,25 +75,56 @@ void webSocketEvents(const uint8_t& num, const WStype_t& type, uint8_t * payload
         String(broadCast[0]) + String(".") +\
         String(broadCast[1]) + String(".") +\
         String(broadCast[2]) + String(".") +\
-        String(broadCast[3]); 
+        String(broadCast[3]) + "\nssid: " + ssid +"\n" +\
+        "password: "+ password;
+        
+        
         webSockets.sendTXT(num,x);
         break;
       }
 
       
-      if(payload[0] != '#'){
-        String msg ="";
-        for(int i=0;i<256;i++){
-          msg += (char)payload[i];
-          if(payload[i+1] == 0)i=256; 
+      if(payload[0] == 's' && payload[1] == 's' && payload[2] == 'i' && payload[3] == 'd' && payload[4] == '='){
+        for(int i=0;i<30;i++)ssid[i]=0;
+        for(int i=5;i<128;i++){
+          ssid[i-5] = payload[i];
+          if(payload[i+1] == 0)i=128; 
         }
-        socketserials_out=msg+"\n";
+        for(int i=0;i<30;i++)EEPROM.write(i, ssid[i]);
+        EEPROM.commit();
+        delay(50);
+        socketserials_out = "Senha alterada, Reboot...\n";
         flag_env_ser_esp = true;
+        delay(50);
+        ESP.restart();
+      }
+      if(payload[0]=='p' && payload[1]=='a' && payload[2]=='s' && payload[3]=='s' && payload[4]=='='){
+        for(int i=0;i<30;i++)password[i]=0;
+        for(int i=5;i<128;i++){
+          password[i-5] = payload[i];
+          if(payload[i+1] == 0)i=128; 
+        }
+        for(int i=0;i<30;i++)EEPROM.write(i+30, password[i]);
+        EEPROM.commit();
+        delay(50);
+        socketserials_out = "Senha alterada, Reboot...\n";
+        flag_env_ser_esp = true;
+        delay(50);
+        ESP.restart();
       }
 
-      if(flag_recebe_ser_esp) { webSockets.sendTXT(num, "< "+socketserials); flag_recebe_ser_esp=false; socketserials = ""; }
-
       
+      
+      if(payload[0] != '#'){
+        String msg3 ="";
+        for(int i=0;i<128;i++){
+          msg3 += (char)payload[i];
+          if(payload[i+1] == 0)i=256; 
+        }
+        socketserials_out=msg3+"\n";
+        flag_env_ser_esp = true;
+        if(flag_recebe_ser_esp) { webSockets.sendTXT(num, "< "+socketserials); flag_recebe_ser_esp=false; socketserials = ""; }
+      }
       break;
       
     case WStype_BIN:
@@ -191,6 +230,11 @@ void webSocketEventc(const WStype_t& type, uint8_t * payload, const size_t& leng
 
  
 void setup() {
+    EEPROM.begin(64);
+    for(int i=0;i<30;i++){
+      ssid[i] = EEPROM.read(i);
+      password[i] = EEPROM.read(i+30);
+    }
     pinMode(LED, OUTPUT);
     Serial.begin(115200);
     
@@ -215,12 +259,21 @@ void setup() {
     if (MDNS.begin("principal")) {
       Serial.println("MDNS responder started");
     }
+
     
-    serverl.on("/", []()
+    serverl.on("/serial", []()
     {
-      // send index.html
       serverl.send(200, "text/html", html_page);
     });
+    serverl.on("/", handleRoot);
+    serverl.on("/login", handleLogin);
+    serverl.onNotFound(handleNotFound);
+    
+    //ask server to track these headers
+    serverl.collectHeaders("User-Agent", "Cookie");
+
+
+  
 
     httpUpdater.setup(&serverl);
     serverl.begin();
